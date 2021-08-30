@@ -1,10 +1,10 @@
-use chess::{Board, ChessMove, MoveGen, Color};
+use chess::{Board, ChessMove, MoveGen, Color, BitBoard};
 use super::eval;
 
 use log::info;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
-use std::ops::Range;
+use std::ops::{Range, Deref};
 
 #[derive(Eq, Clone, Copy)]
 struct EvalMove {
@@ -39,15 +39,16 @@ impl Ord for EvalMove {
     }
 }
 
+static SCORE_MATE: i32 = 1000000;
 pub fn search(board: &Board, moves: Option<Vec<ChessMove>>, depth: u8) -> (ChessMove, i32) {
 
-    let mut max = -99999;
+    let mut max = -9999999;
     let mut bestmove = ChessMove::default();
-    let mut alpha = -100000;
-    let mut beta = 100000;
+    let mut alpha = -1000000;
+    let mut beta = 1000000;
 
     let mut to_eval : Vec<ChessMove> = moves.unwrap_or_else(|| {
-        MoveGen::new_legal(board).collect()
+        order_moves(board)
     });
     info!("searching: depth {}, {} legal moves", depth, to_eval.len());
 
@@ -59,6 +60,7 @@ pub fn search(board: &Board, moves: Option<Vec<ChessMove>>, depth: u8) -> (Chess
         if eval > max {
             info!("new best move: {}", mv);
             max = eval;
+            bestmove = mv;
 
             if eval > alpha {
                 alpha = eval;
@@ -70,25 +72,41 @@ pub fn search(board: &Board, moves: Option<Vec<ChessMove>>, depth: u8) -> (Chess
     (bestmove, max)
 }
 
+fn order_moves(board: &Board) -> Vec<ChessMove> {
+    let mut captures = MoveGen::new_legal(board);
+    let mut other = MoveGen::new_legal(board);
+
+    let occupied = *board.color_combined(!board.side_to_move());
+    let empty = !*board.combined();
+
+    captures.set_iterator_mask(occupied);
+    other.set_iterator_mask(empty);
+
+    captures.chain(other).collect()
+
+}
 fn alphabeta(board: Board, alpha: i32, beta: i32, depth: u8) -> i32 {
     if depth == 0 {
-        //return quiesce(board, alpha, beta);
-        return eval::evaluate_board(&board);
+        return quiesce(board, alpha, beta);
+        //return eval::evaluate_board(&board);
     }
 
     let mut alpha = alpha;
     let mut beta = beta;
 
-    let legal = MoveGen::new_legal(&board);
+    let legal = order_moves(&board);
     if board.checkers().popcnt() > 0 && legal.len() == 0 {
-        return beta;
+        return -SCORE_MATE;
     }
 
     let mut bestscore: i32 = -99999;
 
-    for mv in MoveGen::new_legal(&board) {
+    for mv in legal {
         let score = -alphabeta(board.make_move_new(mv), -beta, -alpha, depth - 1);
 
+        if score < -100000 {
+            return score + 1;
+        }
         if score >= beta {
             return score;
             //return quiesce(board, alpha, beta);
@@ -102,16 +120,20 @@ fn alphabeta(board: Board, alpha: i32, beta: i32, depth: u8) -> i32 {
         }
     }
 
-    bestscore
+    if bestscore > 100000 {
+        bestscore - 1
+    } else {
+        bestscore
+    }
 }
-
+static DELTA_MARGIN: i32 = 200;
 fn quiesce(board: Board, alpha: i32, beta: i32) -> i32 {
     let mut alpha = alpha;
     let cur_eval = eval::evaluate_board(&board);
 
     if cur_eval >= beta {
         return beta;
-    } else {
+    } else if alpha < cur_eval {
         alpha = cur_eval;
     }
 
@@ -124,6 +146,10 @@ fn quiesce(board: Board, alpha: i32, beta: i32) -> i32 {
     legal.set_iterator_mask(*board.color_combined(min_color));
 
     for mv in legal {
+        let piece = board.piece_on(mv.get_dest()).unwrap();
+        if cur_eval + eval::PIECE_VALUES[piece.to_index()] + DELTA_MARGIN < alpha {
+            continue;
+        }
         let score = -quiesce(board.make_move_new(mv), -beta, -alpha);
 
         if score >= beta {

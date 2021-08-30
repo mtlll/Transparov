@@ -62,6 +62,9 @@ static PIECE_TABLES: [[[i32; 8]; 8]; 6] = [
         [-30, -40, -40, -50, -50, -40, -40, 30]
     ]
 ];
+
+pub static PIECE_VALUES: [i32; 6] = [100, 320, 330, 500, 900, 0];
+
 pub fn evaluate_board(board: &Board) -> i32 {
     let mut ret = count_material(board);
 
@@ -72,17 +75,16 @@ pub fn evaluate_board(board: &Board) -> i32 {
 }
 
 fn count_material(board: &Board) -> i32 {
-    let piece_values: [i32; 6] = [100, 300, 300, 500, 900, 0];
     let mut count: i32 = 0;
     for sq in *board.color_combined(Color::White) {
         let piece = board.piece_on(sq).unwrap().to_index();
-        count += piece_values[piece];
+        count += PIECE_VALUES[piece];
         count += PIECE_TABLES[piece][sq.get_rank().to_index()][sq.get_file().to_index()];
     }
 
     for sq in *board.color_combined(Color::Black) {
         let piece = board.piece_on(sq).unwrap().to_index();
-        count -= piece_values[piece];
+        count -= PIECE_VALUES[piece];
         count -= PIECE_TABLES[piece][7 - sq.get_rank().to_index()][7 - sq.get_file().to_index()];
     }
 
