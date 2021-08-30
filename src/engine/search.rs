@@ -5,6 +5,7 @@ use log::info;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::ops::{Range, Deref};
+use std::iter;
 
 #[derive(Eq, Clone, Copy)]
 struct EvalMove {
@@ -54,7 +55,7 @@ pub fn search(board: &Board, moves: Option<Vec<ChessMove>>, depth: u8) -> (Chess
 
     for mv in to_eval.drain(..) {
         let pos = board.make_move_new(mv);
-        let eval = -alphabeta(pos, -beta, -alpha, depth - 1);
+        let eval = -alphabeta(pos, -beta, -alpha, depth - 1, 1);
         info!("eval {}: {}(depth {})", mv, eval, depth);
 
         if eval > max {
@@ -85,11 +86,13 @@ fn order_moves(board: &Board) -> Vec<ChessMove> {
     captures.chain(other).collect()
 
 }
-fn alphabeta(board: Board, alpha: i32, beta: i32, depth: u8) -> i32 {
+fn alphabeta(board: Board, alpha: i32, beta: i32, depth: u8, indent: u8) -> i32 {
     if depth == 0 {
         return quiesce(board, alpha, beta);
         //return eval::evaluate_board(&board);
     }
+
+    let indentation : String = iter::repeat("\t").take(indent as usize ).collect();
 
     let mut alpha = alpha;
     let mut beta = beta;
@@ -102,11 +105,10 @@ fn alphabeta(board: Board, alpha: i32, beta: i32, depth: u8) -> i32 {
     let mut bestscore: i32 = -99999;
 
     for mv in legal {
-        let score = -alphabeta(board.make_move_new(mv), -beta, -alpha, depth - 1);
+        let score = -alphabeta(board.make_move_new(mv), -beta, -alpha, depth - 1, indent + 1);
 
-        if score < -100000 {
-            return score + 1;
-        }
+        //info!("{}eval {}: {}(depth {})", indentation, mv, score, depth);
+
         if score >= beta {
             return score;
             //return quiesce(board, alpha, beta);
@@ -122,6 +124,8 @@ fn alphabeta(board: Board, alpha: i32, beta: i32, depth: u8) -> i32 {
 
     if bestscore > 100000 {
         bestscore - 1
+    } else if bestscore < - 100000 {
+        bestscore + 1
     } else {
         bestscore
     }
