@@ -4,19 +4,23 @@ use super::eval;
 use log::info;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
+use std::collections::HashMap;
 use std::ops::{Range, Deref};
 use std::iter;
 
-#[derive(Eq, Clone, Copy)]
-struct EvalMove {
-    mv: ChessMove,
-    eval: i32,
+#[derive(Eq, Clone, Copy, Debug)]
+pub struct EvalMove {
+    pub mv: ChessMove,
+    pub eval: i32,
+    pub depth: u8,
 }
+
 impl EvalMove {
-    fn new(mv: ChessMove, eval: i32) -> Self {
+    fn new(mv: ChessMove, eval: i32, depth: u8) -> Self {
         EvalMove {
             mv,
-            eval
+            eval,
+            depth,
         }
     }
 }
@@ -24,7 +28,7 @@ impl EvalMove {
 
 impl PartialEq for EvalMove {
     fn eq(&self, other: &Self) -> bool {
-       self.eval == self.eval
+        self.eval == other.eval && self.depth == other.depth
     }
 }
 
@@ -36,41 +40,83 @@ impl PartialOrd for EvalMove {
 
 impl Ord for EvalMove {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.eval.cmp(&other.eval)
+        let eval_cmp = self.eval.cmp(&other.eval);
+
+        match eval_cmp {
+            Ordering::Equal => self.depth.cmp(&other.depth),
+            _ => eval_cmp
+        }
     }
 }
 
+struct TableEntry {
+    best_move: EvalMove,
+    rest: Vec<ChessMove>,
+}
+
 static SCORE_MATE: i32 = 1000000;
-pub fn search(board: &Board, moves: Option<Vec<ChessMove>>, depth: u8) -> (ChessMove, i32) {
+pub fn search(board: &Board, moves: Option<Vec<ChessMove>>, depth: u8) -> EvalMove {
+
+    let mut pos_table: HashMap<Board,TableEntry> = HashMap::new();
 
     let mut max = -9999999;
-    let mut bestmove = ChessMove::default();
+    let mut bestmove : Option<EvalMove> = None;
     let mut alpha = -1000000;
     let mut beta = 1000000;
 
-    let mut to_eval : Vec<ChessMove> = moves.unwrap_or_else(|| {
-        order_moves(board)
-    });
-    info!("searching: depth {}, {} legal moves", depth, to_eval.len());
 
-    for mv in to_eval.drain(..) {
-        let pos = board.make_move_new(mv);
-        let eval = -alphabeta(pos, -beta, -alpha, depth - 1, 1);
-        info!("eval {}: {}(depth {})", mv, eval, depth);
+    let mut move_order : BinaryHeap<EvalMove> = BinaryHeap::new();
 
-        if eval > max {
-            info!("new best move: {}", mv);
-            max = eval;
-            bestmove = mv;
+    for depth in 0..depth {
+        let mut to_eval: Vec<ChessMove> = if (depth > 0) {
+            let mut ret = move_order.into_sorted_vec();
+            move_order = BinaryHeap::new();
+            ret.iter().map(|e| e.mv).collect()
+        } else if let Some(moves) = moves.as_ref() {
+            moves.clone()
+        } else {
+            order_moves(board)
+        };
 
-            if eval > alpha {
-                alpha = eval;
+        info!("searching: depth {}, {} legal moves", depth, to_eval.len());
+
+        if let Some(principal) = bestmove {
+           let pos = board.make_move_new(principal.mv);
+            let eval = -alphabeta(pos, -beta, -alpha, depth);
+            info!("eval {}: {}(depth {})", principal.mv, eval, depth);
+            if eval > max {
+                max = eval;
+
+                if eval > alpha {
+                    alpha = eval;
+                }
             }
         }
+        for mv in to_eval.drain(..) {
+            let pos = board.make_move_new(mv);
+            let eval = -alphabeta(pos, -beta, -alpha, depth);
+            info!("eval {}: {}(depth {})", mv, eval, depth);
 
+            if eval > max {
+                info!("new best move: {}", mv);
+                max = eval;
+                if let Some(old_move) = bestmove {
+                    move_order.push(old_move);
+                    info!("pushing previous best move {} on heap. Len: {}", old_move.mv, move_order.len());
+                }
+                bestmove = Some(EvalMove::new(mv, eval, depth));
+
+                if eval > alpha {
+                    alpha = eval;
+                }
+            } else {
+                move_order.push(EvalMove::new(mv, eval, depth));
+                info!("pushing move {} on heap. Len: {}", mv, move_order.len());
+            }
+        }
     }
 
-    (bestmove, max)
+    bestmove.unwrap()
 }
 
 fn order_moves(board: &Board) -> Vec<ChessMove> {
@@ -86,13 +132,12 @@ fn order_moves(board: &Board) -> Vec<ChessMove> {
     captures.chain(other).collect()
 
 }
-fn alphabeta(board: Board, alpha: i32, beta: i32, depth: u8, indent: u8) -> i32 {
+fn alphabeta(board: Board, alpha: i32, beta: i32, depth: u8) -> i32 {
     if depth == 0 {
         return quiesce(board, alpha, beta);
         //return eval::evaluate_board(&board);
     }
 
-    let indentation : String = iter::repeat("\t").take(indent as usize ).collect();
 
     let mut alpha = alpha;
     let mut beta = beta;
@@ -105,7 +150,7 @@ fn alphabeta(board: Board, alpha: i32, beta: i32, depth: u8, indent: u8) -> i32 
     let mut bestscore: i32 = -99999;
 
     for mv in legal {
-        let score = -alphabeta(board.make_move_new(mv), -beta, -alpha, depth - 1, indent + 1);
+        let score = -alphabeta(board.make_move_new(mv), -beta, -alpha, depth - 1);
 
         //info!("{}eval {}: {}(depth {})", indentation, mv, score, depth);
 
@@ -184,13 +229,29 @@ fn negamax(board: Board, depth: u8) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    #[macro_use]
+    use more_asserts::*;
     use super::EvalMove;
     use super::ChessMove;
 
     #[test]
     fn move_ordering() {
-        assert!(-100 < 100);
-        assert!(EvalMove::new(ChessMove::default(), -100) <
-            EvalMove::new(ChessMove::default(), 100));
+        let mv = ChessMove::default();
+        assert_gt!(
+            EvalMove::new(mv, 100, 0),
+            EvalMove::new(mv, -100, 0)
+        );
+        assert_gt!(
+            EvalMove::new(mv, 100, 1),
+            EvalMove::new(mv, 100, 0)
+        );
+        assert_eq!(
+            EvalMove::new(mv, 100, 0),
+            EvalMove::new(mv, 100, 0)
+        );
+        assert_gt!(
+            EvalMove::new(mv, 200, 1),
+            EvalMove::new(mv, 100, 3)
+        );
     }
 }

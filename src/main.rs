@@ -1,5 +1,6 @@
 mod engine;
 use engine::search;
+use engine::search::EvalMove;
 
 use chess::Board;
 use chess::MoveGen;
@@ -74,7 +75,7 @@ impl Engine {
     }
 }
 
-static DEFAULT_DEPTH: u8 = 4;
+static DEFAULT_DEPTH: u8 = 6;
 fn uci_loop() -> io::Result<()> {
     let mut input = String::new();
     let mut engine = Engine::default();
@@ -125,12 +126,12 @@ fn uci_loop() -> io::Result<()> {
                     moves = Some(sctrl.search_moves);
 
                 }
-                let (mv, eval) = search::search(
+                let eval_move = search::search(
                     &engine.game.current_position(),
                     moves,
                     depth);
 
-                bestmove(mv, None);
+                bestmove(eval_move.mv, None);
             }
             _ => {}
         }
