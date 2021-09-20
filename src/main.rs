@@ -1,21 +1,15 @@
-mod engine;
-use engine::search;
-use engine::search::EvalMove;
-use engine::Engine;
-
-
-use std::process::exit;
 use std::{io, panic};
-use std::io::{stdout, stdin, Write, Error};
-use vampirc_uci::{UciMessage, parse_one, uci::UciFen};
-use std::str::FromStr;
 use std::fs;
+use std::io::{Error, stdin};
 use std::path::Path;
-use std::thread::JoinHandle;
-use std::sync::mpsc::Sender;
 
 use log::{info, SetLoggerError};
-use simplelog::{WriteLogger, LevelFilter, Config};
+use simplelog::{Config, LevelFilter, WriteLogger};
+use vampirc_uci::parse_one;
+
+use engine::Engine;
+
+mod engine;
 
 enum EngineError {
     IOError(io::Error),
@@ -66,11 +60,10 @@ fn init_logger() -> Result<(), EngineError> {
 }
 
 
-static DEFAULT_DEPTH: u8 = 6;
 fn uci_loop() -> io::Result<()> {
     let mut input = String::new();
     let (handle, tx) = {
-        let mut engine = Engine::default();
+        let engine = Engine::default();
         engine.start()
     };
 

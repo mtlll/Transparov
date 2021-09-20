@@ -66,7 +66,7 @@ static PIECE_TABLES: [[[i32; 8]; 8]; 6] = [
 pub static PIECE_VALUES: [i32; 6] = [100, 320, 330, 500, 900, 0];
 
 pub fn evaluate_board(board: &Board) -> i32 {
-    let mut ret = count_material(board);
+    let ret = count_material(board);
 
     ret * match board.side_to_move() {
         Color::White => 1,

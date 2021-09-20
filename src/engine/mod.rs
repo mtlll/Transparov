@@ -1,25 +1,22 @@
 use chess::{Board, ChessMove, Game, Color};
 use vampirc_uci;
-use vampirc_uci::{UciFen, UciTimeControl, UciSearchControl, UciMessage};
+use vampirc_uci::{UciTimeControl, UciMessage};
 use std::thread;
 use std::thread::JoinHandle;
 use std::sync::mpsc;
 use std::sync::mpsc::{Sender, Receiver};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::str::FromStr;
 use std::time::{Instant, Duration};
-use std::time;
 
 use log::info;
 
 pub mod search;
 pub mod eval;
+pub mod ttable;
 
-use search::CacheTable;
-use search::TableEntry;
-use std::rc::Rc;
-use std::cell::RefCell;
+use ttable::CacheTable;
 
 struct SearchHandle {
     thread_handle: Option<JoinHandle<()>>,
@@ -30,7 +27,7 @@ struct SearchHandle {
 
 pub struct Engine {
     board: Option<Board>,
-    cache: Option<Arc<RwLock<CacheTable>>>,
+    cache: Option<CacheTable>,
     best_move: Option<ChessMove>,
     channel_tx: Sender<UciMessage>,
     channel_rx: Receiver<UciMessage>,
@@ -61,7 +58,7 @@ impl SearchHandle {
 
     fn search(&mut self,
               board: &Board,
-              cache: Arc<RwLock<CacheTable>>,
+              cache: CacheTable,
               moves: Option<Vec<ChessMove>>,
               depth: Option<u8>,
               tx: Sender<UciMessage>) {
@@ -127,7 +124,7 @@ impl Default for Engine {
 }
 
 impl Engine {
-    pub fn start(mut self) -> (JoinHandle<()>, Sender<UciMessage>) {
+    pub fn start(self) -> (JoinHandle<()>, Sender<UciMessage>) {
         let tx = self.channel_tx.clone();
         (thread::spawn(|| self.run()), tx)
     }
@@ -177,7 +174,7 @@ impl Engine {
                 self.board = Some(game.current_position());
 
                 if self.cache.is_none() {
-                    self.cache = Some(Arc::new(RwLock::new(CacheTable::new())));
+                    self.cache = Some(CacheTable::default());
                 }
             }
             UciMessage::SetOption { .. } => {}
@@ -234,7 +231,7 @@ impl Engine {
                 let mut pv = Vec::new();
                 let mut bm = Some(best_move);
                 let mut pos = self.board.unwrap().clone();
-                let lock = self.cache.as_ref().unwrap().read().unwrap();
+                let lock = self.cache.as_ref().unwrap().acquire_read();
                 while bm.is_some() {
                     pv.push(bm.unwrap());
                     pos = pos.make_move_new(bm.unwrap());

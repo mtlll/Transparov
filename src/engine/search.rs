@@ -1,101 +1,20 @@
-use chess::{Board, ChessMove, MoveGen, Color, BitBoard, BoardStatus};
-use super::eval;
-
-use log::{info, trace};
-use std::collections::BinaryHeap;
-use std::collections::HashMap;
-use std::ops::{Range, Deref};
-use std::iter;
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::cmp::Reverse;
+use std::sync::Arc;
 use std::sync::atomic;
 use std::sync::mpsc::Sender;
-use std::cell::RefCell;
 
+use chess::{Board, BoardStatus, ChessMove, Color, MoveGen};
+use log::info;
 use vampirc_uci::UciMessage;
-use std::cmp::{Ordering, Reverse};
 
-pub type CacheTable = HashMap<Board, TableEntry>;
+use crate::engine::ttable::{CacheTable, EntryType, EvalMove, TableEntry};
 
-#[derive(Eq, Clone, Copy, Debug)]
-pub struct EvalMove {
-    pub mv: ChessMove,
-    pub eval: i32,
-}
-
-impl EvalMove {
-    fn new(mv: ChessMove, eval: i32 ) -> Self {
-        EvalMove {
-            mv,
-            eval,
-        }
-    }
-
-    fn new_on_board(mv: ChessMove, board: &Board) -> Self {
-        let pos = board.make_move_new(mv);
-        Self::new(mv, -eval::evaluate_board(&pos))
-    }
-}
-
-
-impl PartialEq for EvalMove {
-    fn eq(&self, other: &Self) -> bool {
-        self.eval.eq(&other.eval)
-    }
-}
-
-impl PartialOrd for EvalMove {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for EvalMove {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.eval.cmp(&other.eval)
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, PartialOrd)]
-pub enum EntryType {
-    Pv,
-    Cut,
-    All,
-}
-
-#[derive(Clone, Copy)]
-pub struct TableEntry {
-    pub best_move: EvalMove,
-    pub old_depth: u8,
-    pub entry_type: EntryType,
-}
-
-impl TableEntry {
-    fn new(best_move: EvalMove, old_depth: u8, entry_type: EntryType) -> Self {
-        TableEntry {
-            best_move,
-            old_depth,
-            entry_type,
-        }
-    }
-}
+use super::eval;
 
 static SCORE_MATE: i32 = 10_000_000;
 
-fn acquire_read(lock: &Arc<RwLock<CacheTable>>) -> RwLockReadGuard<CacheTable> {
-    //info!("Waiting for read lock...");
-    let ret = lock.read().unwrap();
-    //info!("Lock acquired.");
-    ret
-}
-
-fn acquire_write(lock: &Arc<RwLock<CacheTable>>) -> RwLockWriteGuard<CacheTable> {
-    //info!("Waiting for write lock...");
-    let ret = lock.write().unwrap();
-    //info!("Lock acquired.");
-    ret
-}
 pub fn search(board: Board,
-              cache: Arc<RwLock<CacheTable>>,
+              cache: CacheTable,
               moves: Option<Vec<ChessMove>>,
               depth: Option<u8>,
               stop: Arc<atomic::AtomicBool>,
@@ -105,7 +24,7 @@ pub fn search(board: Board,
 
 
     let (mut best_move, start) = {
-        let lock = acquire_read(&cache);
+        let lock = cache.acquire_read();
         match lock.get(&board) {
             Some(&TableEntry { best_move, old_depth, entry_type }) => {
                 (Some(best_move.to_owned()), old_depth.to_owned())
@@ -128,7 +47,7 @@ pub fn search(board: Board,
         let mut alpha = -100_000;
         let mut beta = 100_000;
 
-        let mut to_eval: Vec<EvalMove> = if (depth > start) {
+        let mut to_eval: Vec<EvalMove> = if depth > start {
             move_order.sort_by_key(|&em| Reverse(em));
             move_order.drain(..).collect()
         } else if let Some(moves) = moves.as_ref() {
@@ -174,7 +93,7 @@ pub fn search(board: Board,
 }
 
 fn order_moves(board: &Board, best_move: Option<&EvalMove>) -> Vec<EvalMove> {
-    let mut legal = MoveGen::new_legal(board);
+    let legal = MoveGen::new_legal(board);
 
     let mut rest : Vec<EvalMove> = legal.filter_map(|mv| {
         let pos = board.make_move_new(mv);
@@ -198,47 +117,47 @@ fn order_moves(board: &Board, best_move: Option<&EvalMove>) -> Vec<EvalMove> {
 }
 
 fn alphabeta(board: Board,
-             cache: &Arc<RwLock<CacheTable>>,
+             cache: &CacheTable,
              mut alpha: i32,
              mut beta: i32,
              depth: u8,
              root_distance: u8) -> i32
 {
+    match board.status() {
+        BoardStatus::Checkmate => {
+            return -SCORE_MATE;
+        },
+        BoardStatus::Stalemate => {
+            return 0;
+        },
+        _ => {},
+    }
+
     if depth == 0 {
         return quiesce(board, alpha, beta);
         //return eval::evaluate_board(&board);
     }
 
-    let table_entry = {
-        let lock = acquire_read(cache);
-        lock.get(&board).map(&ToOwned::to_owned)
-    };
-
-    if board.status() == BoardStatus::Checkmate {
-        return -SCORE_MATE;
-    }
-
-    let winning_mate_score = SCORE_MATE - root_distance as i32;
-    let losing_mate_score = -SCORE_MATE + root_distance as i32;
+    let mating_score = SCORE_MATE - root_distance as i32;
 
     let mut max = -99_999;
     let mut position_unseen = true;
 
-    let mut best_move = if let Some(TableEntry { best_move, old_depth, entry_type}) = table_entry {
-        if old_depth >= depth {
+    let table_entry = cache.probe(&board);
+    let mut best_move = None;
+
+    if let Some(te) = table_entry {
+
+        if te.old_depth >= depth {
             /* we already have a deeper evaluation cached, so just return it. */
-            return best_move.eval;
+            return te.best_move.eval;
         } else {
             position_unseen = false;
-            Some(best_move.to_owned())
+            best_move = Some(te.best_move.to_owned())
         }
-    } else {
-        None
-    };
+    }
 
     let legal = order_moves(&board, best_move.as_ref());
-
-
 
     for em in legal.iter() {
         let &EvalMove {mv, eval} = em;
@@ -262,6 +181,8 @@ fn alphabeta(board: Board,
         //info!("{}eval {}: {}(depth {})", indentation, mv, score, depth);
 
         if score >= beta {
+            let em = EvalMove::new(mv, score);
+            cache.save(&board, em, depth, EntryType::Cut);
             return score;
             //return quiesce(board, alpha, beta);
         }
@@ -275,24 +196,30 @@ fn alphabeta(board: Board,
         }
 
         //mate pruning
-        if winning_mate_score < beta {
-            beta = winning_mate_score;
-            if alpha >= winning_mate_score {
-                return winning_mate_score;
+        if mating_score < beta {
+            beta = mating_score;
+            if alpha >= mating_score {
+                return mating_score;
             }
         }
 
-        if losing_mate_score > alpha {
-            alpha = losing_mate_score;
-            if beta <= losing_mate_score {
-                return losing_mate_score;
+        if -mating_score > alpha {
+            alpha = -mating_score;
+            if beta <= -mating_score {
+                return -mating_score;
             }
         }
     }
 
 
     if let Some(em) = best_move {
-        acquire_write(&cache).insert(board, TableEntry::new(em, depth, EntryType::Pv));
+        let entry_type = if max < alpha {
+            EntryType::All
+        } else {
+            EntryType::Pv
+        };
+
+        cache.save(&board, em, depth, entry_type);
     }
 
     if max > 1_000_000 {
@@ -307,6 +234,9 @@ fn alphabeta(board: Board,
 static DELTA_MARGIN: i32 = 200;
 
 fn quiesce(board: Board, mut alpha: i32, beta: i32) -> i32 {
+    if board.status() == BoardStatus::Checkmate {
+        return -SCORE_MATE;
+    }
     let cur_eval = eval::evaluate_board(&board);
 
     if cur_eval >= beta {
