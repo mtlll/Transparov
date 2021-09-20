@@ -5,7 +5,7 @@ use engine::Engine;
 
 
 use std::process::exit;
-use std::io;
+use std::{io, panic};
 use std::io::{stdout, stdin, Write, Error};
 use vampirc_uci::{UciMessage, parse_one, uci::UciFen};
 use std::str::FromStr;
@@ -49,7 +49,19 @@ fn init_logger() -> Result<(), EngineError> {
     let _ = WriteLogger::init(LevelFilter::Info,
                               Config::default(),
                               logfile)?;
+    panic::set_hook(Box::new(|panic_info| {
+        if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            if let Some(loc) = panic_info.location() {
+                info!("panic occurred in {} at line {}: {:?}", loc.file(), loc.line(), s);
+            }
 
+            else {
+                info!("panic occurred: {:?}", s);
+            }
+        } else {
+            info!("panic occurred");
+        }
+    }));
     Ok(())
 }
 

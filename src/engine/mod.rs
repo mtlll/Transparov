@@ -6,7 +6,7 @@ use std::thread::JoinHandle;
 use std::sync::mpsc;
 use std::sync::mpsc::{Sender, Receiver};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::str::FromStr;
 use std::time::{Instant, Duration};
 use std::time;
@@ -15,6 +15,11 @@ use log::info;
 
 pub mod search;
 pub mod eval;
+
+use search::CacheTable;
+use search::TableEntry;
+use std::rc::Rc;
+use std::cell::RefCell;
 
 struct SearchHandle {
     thread_handle: Option<JoinHandle<()>>,
@@ -25,6 +30,7 @@ struct SearchHandle {
 
 pub struct Engine {
     board: Option<Board>,
+    cache: Option<Arc<RwLock<CacheTable>>>,
     best_move: Option<ChessMove>,
     channel_tx: Sender<UciMessage>,
     channel_rx: Receiver<UciMessage>,
@@ -55,15 +61,18 @@ impl SearchHandle {
 
     fn search(&mut self,
               board: &Board,
+              cache: Arc<RwLock<CacheTable>>,
               moves: Option<Vec<ChessMove>>,
               depth: Option<u8>,
               tx: Sender<UciMessage>) {
         if self.thread_handle.is_none() {
             info!("Searching for {:?} at depth {:?}.", self.search_length,  depth);
-            let board = board.clone();
             let stop = self.stop.clone();
+            let board = board.clone();
+            let cache = cache.clone();
             self.thread_handle = Some(thread::spawn(move || {
-                search::search(board, moves, depth, stop, tx);
+
+                search::search(board, cache, moves, depth, stop, tx);
             }));
         }
     }
@@ -108,6 +117,7 @@ impl Default for Engine {
         let (tx, rx) = mpsc::channel();
         Engine {
             board: None,
+            cache: None,
             best_move: None,
             channel_tx: tx,
             channel_rx: rx,
@@ -129,11 +139,11 @@ impl Engine {
                 self.handle_message(message);
             }
 
-            if let Some(searcher) = self.searcher.as_mut() {
-                if searcher.search_done() {
+            if let Some(searcher) = self.searcher.as_mut()  {
+                if self.best_move.is_some() && searcher.search_done() {
+                    self.searcher.take().unwrap().die();
                     if let Some(mv) = self.best_move.take() {
                         bestmove(mv, None);
-                        self.searcher.take().unwrap().die();
                     }
                 }
 
@@ -165,10 +175,16 @@ impl Engine {
                 }
 
                 self.board = Some(game.current_position());
+
+                if self.cache.is_none() {
+                    self.cache = Some(Arc::new(RwLock::new(CacheTable::new())));
+                }
             }
             UciMessage::SetOption { .. } => {}
             UciMessage::UciNewGame => {
                 //create a new game
+                self.board = None;
+                self.cache = None;
             }
             UciMessage::Stop => {
                 if let Some(handle) = self.searcher.as_mut() {
@@ -183,7 +199,7 @@ impl Engine {
             UciMessage::Quit => {
             }
             UciMessage::Go { time_control, search_control } => {
-                // start calculating
+                // start calculatinr
                 let mut search_time: Option<Duration> = None;
                 let mut depth: Option<u8> = None;
                 let mut moves: Option<Vec<ChessMove>> = None;
@@ -208,14 +224,33 @@ impl Engine {
                 }
 
                 if let Some(board) = self.board.as_ref() {
-                    searcher.search(board, moves, depth, self.channel_tx.clone());
+                    searcher.search(board, self.cache.as_ref().unwrap().clone(), moves, depth, self.channel_tx.clone());
                 }
 
                 self.searcher = Some(searcher);
             }
             UciMessage::BestMove {best_move, ..} => {
-                info!("Received new best move from searcher thread: {}.", best_move);
                 self.best_move = Some(best_move);
+                let mut pv = Vec::new();
+                let mut bm = Some(best_move);
+                let mut pos = self.board.unwrap().clone();
+                let lock = self.cache.as_ref().unwrap().read().unwrap();
+                while bm.is_some() {
+                    pv.push(bm.unwrap());
+                    pos = pos.make_move_new(bm.unwrap());
+                    bm = lock.get(&pos).map(|te| te.best_move.mv);
+                }
+
+                let mut pvstring = String::new();
+                pv.iter().for_each(|mv| {
+                    if pvstring.is_empty() {
+                        pvstring = format!("{}", mv);
+                    } else {
+                        pvstring = format!("{},{}", pvstring, mv);
+                    }
+                });
+
+                info!("Received new pv from searcher: {}.", pvstring);
             }
             _ => {}
         }
