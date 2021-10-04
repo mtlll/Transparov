@@ -2,10 +2,11 @@ use std::{io, panic};
 use std::fs;
 use std::io::{Error, stdin};
 use std::path::Path;
-
+use std::thread;
 use log::{info, SetLoggerError};
 use simplelog::{Config, LevelFilter, WriteLogger};
-use vampirc_uci::parse_one;
+use vampirc_uci::{parse_one, UciMessage};
+use ctrlc;
 
 use engine::Engine;
 
@@ -46,7 +47,7 @@ fn init_logger() -> Result<(), EngineError> {
     panic::set_hook(Box::new(|panic_info| {
         if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
             if let Some(loc) = panic_info.location() {
-                info!("panic occurred in {} at line {}: {:?}", loc.file(), loc.line(), s);
+                info!("panic occurred in thread: {:?} in {} at line {}: {:?}", thread::current().id(), loc.file(), loc.line(), s);
             }
 
             else {
@@ -62,12 +63,21 @@ fn init_logger() -> Result<(), EngineError> {
 
 fn uci_loop() -> io::Result<()> {
     let mut input = String::new();
+    let mut running = true;
     let (handle, tx) = {
         let engine = Engine::default();
         engine.start()
     };
 
-    loop {
+    {
+        let tx = tx.clone();
+        ctrlc::set_handler(move || {
+            tx.send(UciMessage::Quit);
+            running = false;
+        });
+    }
+
+    while running {
         stdin().read_line(&mut input)?;
 
         let message = parse_one(&input);

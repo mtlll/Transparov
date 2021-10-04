@@ -1,6 +1,7 @@
-use chess::{Board, Color};
+use chess::{Board, Color, Piece};
 
-static PIECE_TABLES: [[[i32; 8]; 8]; 6] = [
+pub type Eval = i16;
+static PIECE_TABLES: [[[Eval; 8]; 8]; 6] = [
     [
         [0, 0, 0, 0, 0, 0, 0, 0],
         [5, 10, 10, -20, -20, 10, 10, 5],
@@ -63,9 +64,9 @@ static PIECE_TABLES: [[[i32; 8]; 8]; 6] = [
     ]
 ];
 
-pub static PIECE_VALUES: [i32; 6] = [100, 320, 330, 500, 900, 0];
+pub static PIECE_VALUES: [Eval; 6] = [100, 320, 330, 500, 900, 0];
 
-pub fn evaluate_board(board: &Board) -> i32 {
+pub fn evaluate_board(board: &Board) -> Eval {
     let ret = count_material(board);
 
     ret * match board.side_to_move() {
@@ -74,18 +75,19 @@ pub fn evaluate_board(board: &Board) -> i32 {
     }
 }
 
-fn count_material(board: &Board) -> i32 {
-    let mut count: i32 = 0;
+fn count_material(board: &Board) -> Eval {
+    let mut count: Eval = 0;
     for sq in *board.color_combined(Color::White) {
-        let piece = board.piece_on(sq).unwrap().to_index();
-        count += PIECE_VALUES[piece];
-        count += PIECE_TABLES[piece][sq.get_rank().to_index()][sq.get_file().to_index()];
+        if let Some(piece) = board.piece_on(sq).as_ref().map(Piece::to_index) {
+            count += PIECE_VALUES[piece];
+            count += PIECE_TABLES[piece][sq.get_rank().to_index()][sq.get_file().to_index()];
+        }
     }
-
     for sq in *board.color_combined(Color::Black) {
-        let piece = board.piece_on(sq).unwrap().to_index();
-        count -= PIECE_VALUES[piece];
-        count -= PIECE_TABLES[piece][7 - sq.get_rank().to_index()][7 - sq.get_file().to_index()];
+        if let Some(piece) = board.piece_on(sq).as_ref().map(Piece::to_index) {
+            count -= PIECE_VALUES[piece];
+            count -= PIECE_TABLES[piece][sq.get_rank().to_index()][sq.get_file().to_index()];
+        }
     }
 
     count

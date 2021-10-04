@@ -17,6 +17,7 @@ pub mod eval;
 pub mod ttable;
 
 use ttable::CacheTable;
+use crate::engine::ttable::TTable;
 
 struct SearchHandle {
     thread_handle: Option<JoinHandle<()>>,
@@ -63,6 +64,7 @@ impl SearchHandle {
               depth: Option<u8>,
               tx: Sender<UciMessage>) {
         if self.thread_handle.is_none() {
+            cache.new_search();
             info!("Searching for {:?} at depth {:?}.", self.search_length,  depth);
             let stop = self.stop.clone();
             let board = board.clone();
@@ -107,6 +109,10 @@ impl SearchHandle {
             self.join();
         });
     }
+
+    fn elapsed(&self) -> Option<Duration> {
+        self.start_time.as_ref().map(Instant::elapsed)
+    }
 }
 
 impl Default for Engine {
@@ -133,22 +139,27 @@ impl Engine {
         let timeout = Duration::from_millis(2);
         loop {
             if let Ok(message) = self.channel_rx.recv_timeout(timeout) {
-                self.handle_message(message);
+                if !self.handle_message(message) {
+                    break;
+                }
             }
 
             if let Some(searcher) = self.searcher.as_mut()  {
                 if self.best_move.is_some() && searcher.search_done() {
+                    let elapsed = self.searcher.as_ref().map(SearchHandle::elapsed).flatten();
                     self.searcher.take().unwrap().die();
+
                     if let Some(mv) = self.best_move.take() {
                         bestmove(mv, None);
                     }
                 }
-
             }
+
+            thread::yield_now()
         }
     }
 
-    fn handle_message(&mut self, message: UciMessage) {
+    fn handle_message(&mut self, message: UciMessage) -> bool {
         match message {
             UciMessage::Uci => {
                 id();
@@ -174,7 +185,7 @@ impl Engine {
                 self.board = Some(game.current_position());
 
                 if self.cache.is_none() {
-                    self.cache = Some(CacheTable::default());
+                    self.cache = Some(Arc::new(TTable::new(1024)));
                 }
             }
             UciMessage::SetOption { .. } => {}
@@ -194,9 +205,14 @@ impl Engine {
 
             UciMessage::PonderHit => {}
             UciMessage::Quit => {
+                if let Some(mut handle) = self.searcher.take() {
+                    handle.join();
+                }
+
+                return false;
             }
             UciMessage::Go { time_control, search_control } => {
-                // start calculatinr
+                // start calculating
                 let mut search_time: Option<Duration> = None;
                 let mut depth: Option<u8> = None;
                 let mut moves: Option<Vec<ChessMove>> = None;
@@ -231,11 +247,11 @@ impl Engine {
                 let mut pv = Vec::new();
                 let mut bm = Some(best_move);
                 let mut pos = self.board.unwrap().clone();
-                let lock = self.cache.as_ref().unwrap().acquire_read();
                 while bm.is_some() {
                     pv.push(bm.unwrap());
                     pos = pos.make_move_new(bm.unwrap());
-                    bm = lock.get(&pos).map(|te| te.best_move.mv);
+                    let (te, _) = self.cache.as_ref().unwrap().probe(&pos);
+                    bm = te.map(|te| te.mv.into());
                 }
 
                 let mut pvstring = String::new();
@@ -250,7 +266,10 @@ impl Engine {
                 info!("Received new pv from searcher: {}.", pvstring);
             }
             _ => {}
+
         }
+
+        true
     }
 
 }

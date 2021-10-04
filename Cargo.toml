@@ -12,3 +12,5 @@ rand = "0.8.4"
 log = "0.4"
 simplelog = "^0.10.0"
 more-asserts = "0.2.1"
+rayon = "1.1"
+ctrlc = { version = "3.0", features = ["termination"] }
