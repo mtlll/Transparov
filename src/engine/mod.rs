@@ -15,6 +15,7 @@ use log::info;
 pub mod search;
 pub mod eval;
 pub mod ttable;
+pub mod threads;
 
 use ttable::CacheTable;
 use crate::engine::ttable::TTable;
