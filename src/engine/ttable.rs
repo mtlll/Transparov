@@ -1,31 +1,30 @@
 use std::cmp;
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::sync::atomic::{AtomicU64, AtomicU32, Ordering, AtomicU8};
 use std::mem;
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::Arc;
 
 use chess::{Board, ChessMove, Square, ALL_PIECES};
 
 use crate::engine::eval;
-use std::time::{Instant, Duration};
-use std::iter;
-use std::mem::MaybeUninit;
-use std::num::Wrapping;
 use crate::engine::eval::Eval;
+use lazy_static::lazy_static;
+use std::iter;
+
+lazy_static! {
+    pub static ref TT: TTable = TTable::new(1024);
+}
 
 pub type CacheTable = Arc<TTable>;
 
 #[derive(Clone, Copy, Ord, PartialOrd, PartialEq, Eq, Default)]
 #[repr(transparent)]
 pub struct Move16 {
-    mv: u16
+    mv: u16,
 }
 
 impl From<u16> for Move16 {
     fn from(mv: u16) -> Self {
-        Move16 {
-            mv
-        }
+        Move16 { mv }
     }
 }
 
@@ -91,17 +90,13 @@ pub struct TTEntry {
 
 impl From<u64> for TTEntry {
     fn from(uint: u64) -> Self {
-        unsafe {
-            mem::transmute::<u64, TTEntry>(uint)
-        }
+        unsafe { mem::transmute::<u64, TTEntry>(uint) }
     }
 }
 
 impl From<TTEntry> for u64 {
     fn from(entry: TTEntry) -> Self {
-        unsafe {
-            mem::transmute::<TTEntry, u64>(entry)
-        }
+        unsafe { mem::transmute::<TTEntry, u64>(entry) }
     }
 }
 
@@ -112,7 +107,7 @@ impl TTEntry {
             mv,
             eval,
             depth,
-            genbound
+            genbound,
         }
     }
     pub fn entry_type(&self) -> EntryType {
@@ -133,7 +128,9 @@ impl TTCluster {
     }
 
     fn save_entry<T>(&self, idx: usize, new_entry: T)
-    where T: Into<u64> {
+    where
+        T: Into<u64>,
+    {
         self.entries[idx].store(new_entry.into(), Ordering::SeqCst);
     }
 }
@@ -146,7 +143,7 @@ const GEN_MASK: u16 = (0xFF << GEN_BITS) & 0xFF;
 pub struct TTable {
     cluster_count: u64,
     gen8: AtomicU8,
-    table: Vec<TTCluster>
+    table: Vec<TTCluster>,
 }
 
 impl TTable {
@@ -172,12 +169,10 @@ impl TTable {
         let mut replace_idx = 0;
         let mut replace_entry: Option<TTEntry> = None;
 
-
-
         for idx in 0..CLUSTER_SIZE {
             let mut entry: TTEntry = cluster.get_entry(idx);
             if (entry.key16 == key16) || entry.depth != 0 {
-                entry.genbound = (self.gen8() | (entry.genbound & (GEN_DELTA - 1)));
+                entry.genbound = self.gen8() | (entry.genbound & (GEN_DELTA - 1));
                 cluster.save_entry(idx, entry);
 
                 if entry.depth != 0 {
@@ -186,22 +181,28 @@ impl TTable {
                     return (None, (cluster_idx, idx));
                 }
             } else if let Some(replace) = replace_entry.as_ref() {
-
                 if self.entry_age(replace) > self.entry_age(&entry) {
                     replace_entry = Some(entry);
                     replace_idx = idx;
                 }
             } else {
-                replace_entry = Some(entry);;
+                replace_entry = Some(entry);
             }
-
         }
 
         (None, (cluster_idx, replace_idx))
     }
 
-    pub fn save<T>(&self, handle: TTHandle, board: &Board, mv: T, eval: Eval, depth: Depth8, et: EntryType)
-        where T: Into<Move16>
+    pub fn save<T>(
+        &self,
+        handle: TTHandle,
+        board: &Board,
+        mv: T,
+        eval: Eval,
+        depth: Depth8,
+        et: EntryType,
+    ) where
+        T: Into<Move16>,
     {
         let key = board.get_hash();
         let entry = self.get_entry(handle);
@@ -222,9 +223,7 @@ impl TTable {
     }
 
     fn get_cluster(&self, idx: usize) -> &TTCluster {
-        unsafe {
-            self.table.get_unchecked(idx)
-        }
+        unsafe { self.table.get_unchecked(idx) }
     }
 
     fn get_entry(&self, handle: TTHandle) -> TTEntry {
@@ -262,7 +261,6 @@ fn mul_hi_64(x: u64, y: u64) -> usize {
 
 //pub type CacheTable = Arc<RwLock<HashMap<Board, TableEntry>>>;
 
-
 #[derive(Eq, Clone, Copy, Debug)]
 pub struct EvalMove {
     pub mv: ChessMove,
@@ -270,11 +268,8 @@ pub struct EvalMove {
 }
 
 impl EvalMove {
-    pub fn new(mv: ChessMove, eval: Eval ) -> Self {
-        EvalMove {
-            mv,
-            eval,
-        }
+    pub fn new(mv: ChessMove, eval: Eval) -> Self {
+        EvalMove { mv, eval }
     }
 
     pub fn new_on_board(mv: ChessMove, board: &Board) -> Self {
@@ -282,7 +277,6 @@ impl EvalMove {
         Self::new(mv, -eval::evaluate_board(&pos))
     }
 }
-
 
 impl PartialEq for EvalMove {
     fn eq(&self, other: &Self) -> bool {
@@ -307,26 +301,20 @@ impl Ord for EvalMove {
 pub enum EntryType {
     Pv = 1 << 2,
     Cut = 1 << 1,
-    All = 1 << 0
+    All = 1 << 0,
 }
 
 impl From<u8> for EntryType {
     fn from(uint: u8) -> Self {
-        unsafe {
-            mem::transmute::<u8, EntryType>(uint)
-        }
+        unsafe { mem::transmute::<u8, EntryType>(uint) }
     }
 }
 
 impl From<EntryType> for u8 {
     fn from(et: EntryType) -> Self {
-        unsafe {
-            mem::transmute::<EntryType, u8>(et)
-        }
+        unsafe { mem::transmute::<EntryType, u8>(et) }
     }
 }
-
-
 
 #[cfg(test)]
 mod test {
@@ -346,9 +334,7 @@ mod test {
                 if dst == src {
                     continue;
                 }
-                let (src_sq, dst_sq) = unsafe {
-                    (Square::new(src), Square::new(dst))
-                };
+                let (src_sq, dst_sq) = unsafe { (Square::new(src), Square::new(dst)) };
                 let non_prom = ChessMove::new(src_sq, dst_sq, None);
                 assert!(conversion_works(non_prom));
 
@@ -358,7 +344,6 @@ mod test {
                 }
             }
         }
-
     }
 
     fn conversion_works(mv: ChessMove) -> bool {
